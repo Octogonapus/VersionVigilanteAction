@@ -1,0 +1,68 @@
+name: VersionVigilante
+description: 'Check for a Julia package version bump on a PR.'
+inputs:
+  julia-version:
+    description: 'The version of Julia to run VersionVigilante with.'
+    required: false
+    default: '1'
+  master_branch:
+    description: 'The master_branch kwarg to VersionVigilante.'
+    required: false
+    default: 'main'
+  token:
+    description: 'The GitHub PAT used to manage labels on the PR.'
+    required: true
+    default: ${{ github.token }}
+runs:
+  using: "composite"
+  steps:
+      - name: Cancel Previous Runs
+        uses: styfle/cancel-workflow-action@0.9.1
+        with:
+          access_token: ${{ github.token }}
+      - uses: actions/checkout@v3
+        with:
+          persist-credentials: false
+          path: ./source-repo/
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ inputs.julia-version }}
+      - name: VersionVigilante.main
+        id: versionvigilante_main
+        shell: bash
+        run: |
+          julia -e '
+            using Pkg
+            Pkg.add("VersionVigilante")
+            using VersionVigilante
+            VersionVigilante.main(
+              "https://x-access-token:${{ inputs.token }}@github.com/${{ github.repository }}";
+              build_directory = "./source-repo/",
+              master_branch = "${{ inputs.master_branch }}",
+            )
+          '
+      - name: ✅ Un-Labeller (if success)
+        if: (steps.versionvigilante_main.outputs.compare_versions == 'success') && (success() || failure())
+        continue-on-error: true
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ inputs.token }}
+          script: |
+            github.rest.issues.removeLabel({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'needs version bump'
+            })
+      - name: ❌ Labeller (if failure)
+        if: (steps.versionvigilante_main.outputs.compare_versions == 'failure') && (success() || failure())
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ inputs.token }}
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['needs version bump']
+            })
